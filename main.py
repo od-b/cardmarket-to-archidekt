@@ -1,20 +1,28 @@
-from datetime import datetime
 import json
-from typing import Any, Literal
-from bs4 import BeautifulSoup
+import sys
+import glob
+import shutil
+import logging
 import csv
+from typing import Any, Literal
+from datetime import datetime
+from pathlib import Path
+
 import asyncio
 import aiohttp
+import aiofiles
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field, model_validator
-import glob
-from pathlib import Path
 from loguru import logger
-import shutil
+
+
+logger.add(sys.stderr, level=logging.DEBUG)
 
 DATA_DIR = "./data"
 INPUT_GLOB = "*.html"
 
 EUR_TO_USD_MULTIPLIER = 1.16  # todo: find a API that provides this
+
 
 COMPLETED_DIR = f"{DATA_DIR}/completed"
 INPUT_DIR = f"{DATA_DIR}/input"
@@ -82,15 +90,15 @@ class Article(ScryfallData, ArticleAttributes):
 
         return self
 
-    def notify_empty_fields(self):
-        has_none_field = False
+    def get_nonefields(self):
+        return self.name, [k for k, v in self.__dict__.items() if v is None]
 
-        for k, v in self.__dict__.items():
+    def has_nonefield(self):
+        for v in self.__dict__.values():
             if v is None:
-                has_none_field = True
-                print(f"{self.name} -- field '{k}' needs manual input")
+                return True
 
-        return has_none_field
+        return False
 
 
 async def fetch_scryfall_data(product_id: str):
@@ -115,6 +123,7 @@ async def fetch_scryfall_data(product_id: str):
 
 
 async def parse_article(art: Any):
+    # BeautifulSoup seems to lack exported types, so ignore for now
     article_attrs = ArticleAttributes.model_validate(art.attrs)  # type: ignore
     finish = (
         "Foil" if art.find("span", attrs={"title": "Foil"}) else "Normal"  # type: ignore
@@ -138,38 +147,75 @@ async def parse_article_soup(soup: BeautifulSoup):
     return articles
 
 
-async def main():
-    fpaths = glob.glob(f"{INPUT_DIR}/{INPUT_GLOB}")
+async def process_purchase(html_path: Path):
+    print(f"Processing HTML: {html_path}")
 
-    if not fpaths:
+    async with aiofiles.open(html_path) as infile:
+        contents = await infile.read()
+        soup = BeautifulSoup(contents, "html.parser")
+
+    articles = await parse_article_soup(soup)
+
+    return articles
+
+
+async def main():
+    # this function used blocking i/o,
+    # doesn't really matter unless this is exported as a module at some point
+
+    glob_paths = glob.glob(f"{INPUT_DIR}/{INPUT_GLOB}")
+
+    if not glob_paths:
         logger.error(f"No files found given glob = {f'{INPUT_DIR}/{INPUT_GLOB}'}")
         exit(1)
 
+    fpaths = [Path(p) for p in glob_paths]
     completed_dir = Path(COMPLETED_DIR).resolve()
     output_dir = Path(OUTPUT_DIR).resolve()
     completed_dir.mkdir(exist_ok=True)
     output_dir.mkdir(exist_ok=True)
     outpath = output_dir.joinpath(f"out-{datetime.now()}.csv")
 
-    # should make file i/o stuff async if adding a very large amount of stuff
+    results = await asyncio.gather(
+        *(asyncio.create_task(process_purchase(fpath)) for fpath in fpaths)
+    )
+    needs_input: list[tuple[Path, Article]] = []
+    n_articles_total = 0
 
-    for fp in fpaths:
-        with open(fp) as infile:
-            soup = BeautifulSoup(infile, "html.parser")
+    with open(outpath, "a+") as outfile:
+        writer = csv.DictWriter(outfile, fieldnames=CSV_HEADER)
+        writer.writeheader()
 
-        articles = await parse_article_soup(soup)
-        write_csv_header = outpath.is_file()
+        for fpath, articles in zip(fpaths, results):
+            n_articles = len(articles)
+            n_articles_total += n_articles
 
-        with open(outpath, "a+") as outfile:
-            writer = csv.DictWriter(outfile, fieldnames=CSV_HEADER)
-            if write_csv_header:
-                writer.writeheader()
+            print(f"Writing {n_articles} articles from {fpath}")
 
             for article in articles:
-                article.notify_empty_fields()
+                if article.has_nonefield():
+                    needs_input.append((fpath, article))
+
                 writer.writerow(json.loads(article.model_dump_json()))
 
-        shutil.move(fp, completed_dir)
+    print(f"Moving parsed files to {completed_dir}")
+
+    for fpath in fpaths:
+        shutil.move(fpath, completed_dir)
+
+    print(f"Processed a total of {n_articles_total} articles")
+
+    if needs_input:
+        print(f"WARNING: The following {len(needs_input)} articles need manual input:")
+        for fpath, article in needs_input:
+            card_name, none_keys = article.get_nonefields()
+
+            print("---")
+            print(f"Card '{card_name}' (in {fpath})")
+            for k in none_keys:
+                print(f"> {k}")
+    else:
+        print("OK: No articles in need of manual input")
 
 
 if __name__ == "__main__":
