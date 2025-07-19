@@ -1,28 +1,29 @@
 import json
-import sys
 import glob
 import shutil
-import logging
 import csv
+
 from typing import Any, Literal
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import asyncio
 import aiohttp
 import aiofiles
 from bs4 import BeautifulSoup
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasPath, BaseModel, Field, model_validator
 from loguru import logger
 
-
-logger.add(sys.stderr, level=logging.DEBUG)
 
 DATA_DIR = "./data"
 INPUT_GLOB = "*.html"
 
-EUR_TO_USD_MULTIPLIER = 1.16  # todo: find a API that provides this
-
+EXCHANGE_RATE = {
+    "EUR_TO_USD": 1.16,
+}
+""" 
+Defaults to this value of fetch to ECB fails
+"""
 
 COMPLETED_DIR = f"{DATA_DIR}/completed"
 INPUT_DIR = f"{DATA_DIR}/input"
@@ -38,6 +39,8 @@ CONDITION_MAPPING = {
     "7": "D",
 }
 
+# these could be found programmatically (as in the csv_header method), but it's easier to import into archidekt like this
+# not used, as it's better to control the order of fields explicitly (faster to import on archidekt with preset cols)
 CSV_HEADER = [
     "quantity",
     "name",
@@ -50,10 +53,79 @@ CSV_HEADER = [
 ]
 
 
+class ECBData(BaseModel):
+    observations: dict[int, list[float | None]] = Field(
+        validation_alias=AliasPath("series", "0:0:0:0:0", "observations")
+    )
+
+
+class ECBResponse(BaseModel):
+    datasets: list[ECBData] = Field(alias="dataSets")
+
+
+async def update_eur_to_usd_rate():
+    """
+    Get EUR to USD exchange rate from the european central bank API.
+
+    Overkill, but free and its sure to stay available.
+
+    Docs: https://data.ecb.europa.eu/help/api/data
+    """
+    # set from to 3 days ago so we are sure to get a response. Selects the last one anyhow.
+    yesterday = datetime.now(UTC) - timedelta(days=3)
+
+    # .D => daily
+    url = "https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A"
+    headers = {
+        "accept": "application/json",
+    }
+    params = {
+        "format": "jsondata",
+        "startPeriod": yesterday.strftime("%Y-%m-%d"),
+    }
+
+    async with aiohttp.ClientSession(headers=headers) as session:
+        async with session.get(url, params=params) as resp:
+            if not resp.ok:
+                logger.error(
+                    f"Failed to get latest euro to USD exchange rate. "
+                    f"Defaulting to 1EUR = {EXCHANGE_RATE['EUR_TO_USD']}USD"
+                )
+                return False
+
+            content = await resp.json()
+            # logger.debug(json.dumps(content, indent=2))
+            data = ECBResponse.model_validate(content)
+            # logger.debug(data)
+
+            if not data.datasets or not data.datasets[0].observations:
+                logger.error("No datasets, adjust timedelta")
+                return False
+
+            # select the last observation
+            observations = data.datasets[0].observations
+            latest_observation = observations[list(observations.keys())[-1]]
+
+            if not latest_observation:
+                logger.error("No observations")
+                return False
+
+            rate = latest_observation[0]
+
+            if not isinstance(rate, float):
+                logger.error(
+                    f"Expected first item in latest observations {latest_observation} to be EUR rate, found {rate}"
+                )
+                return False
+
+            EXCHANGE_RATE["EUR_TO_USD"] = rate
+
+            return True
+
+
 class CsvModel(BaseModel):
     @classmethod
     def csv_header(cls):
-        # not used, as it's better to control the order of fields explicitly (faster to import on archidekt with preset cols)
         schema = cls.model_json_schema(by_alias=False)
         props: dict[str, Any] | None = schema.get("properties")
         assert isinstance(props, dict)
@@ -86,7 +158,7 @@ class Article(ScryfallData, ArticleAttributes):
             self.condition = CONDITION_MAPPING.get(self.condition, None)
 
         if self.price:
-            self.price = round(EUR_TO_USD_MULTIPLIER * self.price, 2)
+            self.price = round(EXCHANGE_RATE["EUR_TO_USD"] * self.price, 2)
 
         return self
 
@@ -163,6 +235,9 @@ async def main():
     # this function used blocking i/o,
     # doesn't really matter unless this is exported as a module at some point
 
+    await update_eur_to_usd_rate()
+    print(f"Using exchange rate: 1 EUR <=> {EXCHANGE_RATE['EUR_TO_USD']} USD")
+
     glob_paths = glob.glob(f"{INPUT_DIR}/{INPUT_GLOB}")
 
     if not glob_paths:
@@ -182,7 +257,7 @@ async def main():
     needs_input: list[tuple[Path, Article]] = []
     n_articles_total = 0
 
-    with open(outpath, "a+") as outfile:
+    with open(outpath, "w") as outfile:
         writer = csv.DictWriter(outfile, fieldnames=CSV_HEADER)
         writer.writeheader()
 
