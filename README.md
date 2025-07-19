@@ -1,0 +1,1 @@
+# cardmarket-to-archidekt
