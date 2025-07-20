@@ -186,7 +186,7 @@ async def fetch_scryfall_data(cardmarket_id: str):
             raise ValueError(f"Could not find a card with this ID: {cardmarket_id}")
 
         content = await resp.json()
-        logger.debug(json.dumps(content, indent=2))
+        # logger.debug(json.dumps(content, indent=2))
 
         return ScryfallData.model_validate(content)
 
@@ -271,7 +271,7 @@ async def main():
         settings.eur_to_usd_multiplier = eur_usd_rate
         logger.info(f"Using exchange rate from ECB: 1 EUR <=> {eur_usd_rate} USD")
     except Exception as exc:  # noqa: BLE001
-        logger.error(exc)
+        logger.exception(exc)
         logger.info(
             f"Using default exchange rate: 1 EUR <=> {settings.eur_to_usd_multiplier} USD",
         )
