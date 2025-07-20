@@ -14,9 +14,12 @@ from bs4 import BeautifulSoup
 from pydantic import AliasPath, BaseModel, Field, model_validator
 from loguru import logger
 
-
 DATA_DIR = "./data"
 INPUT_GLOB = "*.html"
+
+COMPLETED_DIR = f"{DATA_DIR}/completed"
+INPUT_DIR = f"{DATA_DIR}/input"
+OUTPUT_DIR = f"{DATA_DIR}/output"
 
 EXCHANGE_RATE = {
     "EUR_TO_USD": 1.16,
@@ -24,10 +27,6 @@ EXCHANGE_RATE = {
 """ 
 Defaults to this value of fetch to ECB fails
 """
-
-COMPLETED_DIR = f"{DATA_DIR}/completed"
-INPUT_DIR = f"{DATA_DIR}/input"
-OUTPUT_DIR = f"{DATA_DIR}/output"
 
 CONDITION_MAPPING = {
     "1": "M",
