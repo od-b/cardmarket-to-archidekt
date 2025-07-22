@@ -113,7 +113,13 @@ class ArticleRecord(ArticleAttributes, ScryfallData):
                 },
             )
 
-            scryfall_data = await fetch_scryfall_data(article_attrs.cardmarket_id)
+            try:
+                scryfall_data = await fetch_scryfall_data(article_attrs.cardmarket_id)
+            except ValueError as exc:
+                logger.error(
+                    f"Failed to fetch scryfall data for card with name: {article_attrs.name}: {exc}",
+                )
+                return None
 
             return cls.model_validate(
                 {
@@ -129,6 +135,7 @@ class ArticleRecord(ArticleAttributes, ScryfallData):
                 logger.debug(exc.json())
             else:
                 logger.error(f"Error: {exc}, article sourced from file = '{fpath}'")
+
             return None
 
     @field_validator("condition", mode="after")
