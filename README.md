@@ -22,12 +22,11 @@ Semi-automated tool to import Cardmarket purchases into Archidekt collection
 ### Usage
 
 1. Save HTML pages from e.g. `https://www.cardmarket.com/en/Magic/Orders/Purchases/Sent` to `./data/input`
-2. Run with main.py (**from this directory**, `python main.py`)
+2. Run with main.py (**from this directory**, `uv run main.py`)
 3. At the archidekt [import page](https://archidekt.com/collections/import), set up the following columns. (click **"Add manual column"** 8 times, then modify the last one to say "Scryfall Id")  
    <img src="./import_columns.png" width="600" alt="columns, showing [quantity, name, finish, condition, ignore, language, price, scryfall_id]"/>
 4. Upload or drag the generated CSV (located at `data/records/`)
 
 ### TODO
 
-- Change to one of the preset column formats on Archidekt
 - Automate HTML downloads
