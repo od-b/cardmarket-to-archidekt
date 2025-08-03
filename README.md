@@ -6,8 +6,7 @@
 
 1. [UV](https://docs.astral.sh/uv/getting-started/installation/)
 
-- If you have homebrew, you can install with `brew install uv`
-- Alternatively, run `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- If you have homebrew, you can install with `brew install uv`. Alternatively, run `curl -LsSf https://astral.sh/uv/install.sh | sh`.
 
 2. Install dependencies with `uv sync`
 
