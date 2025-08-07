@@ -36,6 +36,7 @@ class ScriptSettings(BaseModel):
         default=1.16,
         description="Updated to latest available if able to",
     )
+    default_lang: str | None = Field(default="en")
 
 
 settings = ScriptSettings()
@@ -116,7 +117,7 @@ class PartialScryfallData(BaseModel):
     """
 
     scryfall_id: str | None = Field(default=None, alias="id")
-    language: str | None = Field(default=None, alias="lang")
+    language: str | None = Field(default=settings.default_lang, alias="lang")
 
 
 class ArticleRecordBase(ArticleCSVRecordBase):
