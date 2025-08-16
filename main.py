@@ -34,9 +34,16 @@ class ScriptSettings(BaseModel):
     )
     eur_to_usd_multiplier: float = Field(
         default=1.16,
-        description="Updated to latest available if able to",
+        description="This default value is used if the exchange rate cannot be fetched from ECB.",
     )
-    default_lang: str | None = Field(default="en")
+    default_lang: str | None = Field(
+        default="en",
+        description="Default language for cards where scryfall data is not available.",
+    )
+    skip_by_name: list[str] | None = Field(
+        default=["token", " emblem"],
+        description="Skip articles with any of the given strings in their name",
+    )
 
 
 settings = ScriptSettings()
@@ -58,8 +65,11 @@ class ArticleCSVRecordBase(BaseModel):
 
 
 class ArticleAttributes(BaseModel):
+    name: str = Field(
+        alias="data-name",
+        description="Overwritten by Scryfall data if available",
+    )
     quantity: int = Field(alias="data-amount")
-    name: str = Field(alias="data-name")
     condition: str = Field(alias="data-condition")
     price: float = Field(alias="data-price")
     cardmarket_id: str = Field(alias="data-product-id")
@@ -82,11 +92,24 @@ class PartialArticleAttributes(BaseModel):
 
 class ScryfallData(BaseModel):
     """
-    A bunch of stuff can be added to this model, as long as the header is updated.
+    Fields from the scryfall response that are used in the article csv records.
     """
 
     scryfall_id: str = Field(alias="id")
     language: str = Field(alias="lang")
+
+
+class ScryfallResponse(ScryfallData):
+    """
+    Raw response from Scryfall API for a cardmarket product ID.
+    Lots of fields are available, but only a few are used in the article csv records.
+    """
+
+    name: str = Field(alias="name")
+    set: str = Field(alias="set")
+    collector_number: str = Field(alias="collector_number")
+    scryfall_uri: str = Field(alias="scryfall_uri")
+    layout: str = Field(alias="layout")
 
     @classmethod
     async def fetch_from_cardmarket_id(cls, cardmarket_id: str):
@@ -202,17 +225,39 @@ class ArticleRecord(ArticleRecordBase, ArticleAttributes, ScryfallData):
                 },
             )
 
+        if (
+            settings.skip_by_name
+            and isinstance(article_attrs.name, str)
+            and any(
+                pat.lower() in article_attrs.name.lower()
+                for pat in settings.skip_by_name
+            )
+        ):
+            logger.info(
+                f"Skipping article with name '{article_attrs.name}'.",
+            )
+            return None
+
         scryfall_data: ScryfallData | None = None
 
-        try:
-            if article_attrs.cardmarket_id is not None:
-                scryfall_data = await ScryfallData.fetch_from_cardmarket_id(
+        if article_attrs.cardmarket_id is not None:
+            try:
+                # fetch scryfall data for card with the given cardmarket ID (fails if not a card)
+                scryfall_response = await ScryfallResponse.fetch_from_cardmarket_id(
                     article_attrs.cardmarket_id,
                 )
-        except Exception as exc:  # noqa: BLE001
-            logger.error(
-                f"Failed to fetch scryfall data for card with name '{article_attrs.name}', sourced from '{fpath.name}'. Details: {exc}.",
-            )
+                # overwrite certain fields with the data from Scryfall
+                article_attrs.name = scryfall_response.name
+
+                scryfall_data = ScryfallData.model_validate(
+                    {
+                        **scryfall_response.model_dump(by_alias=True),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    f"Failed to fetch scryfall data for card with name '{article_attrs.name}', sourced from '{fpath.name}'. Details: {exc}.",
+                )
 
         return_cls = (
             PartialArticleRecord
@@ -248,6 +293,7 @@ async def process_order(html_path: Path):
         )
 
         maybe_results = await asyncio.gather(*tasks, return_exceptions=True)
+        maybe_results = [res for res in maybe_results if res is not None]  # pyright: ignore[reportUnnecessaryComparison]
 
         return html_path, maybe_results
 
